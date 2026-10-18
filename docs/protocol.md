@@ -18,6 +18,7 @@ catalog CLIはmetadataだけを検査する。artifactの取得、hashの実フ�
 draftは選定中。readyはsource commit・ライセンス・image digest・ROS distro・RMW・platform・通信隔離profile・予算・編集範囲が固定されたもの。
 readyにはbundleとverification記録のSHA256、未修正fail・参照修正pass・誤修正fail・回帰passを3回以上再現した証拠を要求する。
 validatorはその宣言の形式と整合だけを確認する。記録の存在・真正性・再現実行を保証する機能はまだない。
+schema v1は全階層で未定義fieldを拒否する。fieldの追加はschemaとvalidatorを明示的に更新する。
 `historical`は上流履歴の不具合、`injected`は注入障害、`feature`は追加/マスクした機能。`candidate`のままreadyにはできない。
 
 ## Interface contract

@@ -51,6 +51,18 @@ class CatalogTests(unittest.TestCase):
                 document["cases"][0][field] = value
                 self.assertTrue(validate(document))
 
+    def test_unknown_fields_are_rejected_at_every_level(self):
+        for level in ["catalog", "case", "source", "runtime", "artifacts", "controls", "limits", "acceptance"]:
+            with self.subTest(level=level):
+                document = fixture(True)
+                case = document["cases"][0]
+                target = document if level == "catalog" else case if level == "case" else case[level]
+                target["typo_field"] = None
+                self.assertTrue(any("unknown fields" in error for error in validate(document)))
+        document = fixture()
+        document["cases"][0]["source"]["revison"] = None
+        self.assertTrue(validate(document))
+
     def test_ready_rejects_unpinned_or_unverified_cases(self):
         mutations = [("source","revision","main"),("source","kind","candidate"),("source","license",None),
                      ("runtime","image","ros:jazzy"),("runtime","network","host"),("runtime","platform","native"),

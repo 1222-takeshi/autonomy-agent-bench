@@ -7,12 +7,28 @@ from pathlib import Path, PurePosixPath
 
 TRACKS = {"algorithm_debug": "ALG", "integration_debug": "INT", "feature_implementation": "FEAT"}
 HEX40, HEX64 = r"[0-9a-f]{40}", r"[0-9a-f]{64}"
+FIELDS = {
+    "catalog": "schema_version cases",
+    "case": "id track status title issue source runtime artifacts controls limits editable_paths acceptance",
+    "source": "repository revision kind license",
+    "runtime": "image ros_distro rmw platform network",
+    "artifacts": "bundle_sha256 verification_sha256",
+    "controls": "baseline reference wrong_patch regression repetitions",
+    "limits": "wall_seconds output_tokens tool_calls",
+    "acceptance": "normal edge invalid regression",
+}
 
 
 def validate(document, require_ready=False):
     errors, seen = [], set()
     if not isinstance(document, dict):
         return ["catalog must be an object"]
+
+    def check_fields(value, kind, label):
+        if set(value).difference(FIELDS[kind].split()):
+            errors.append(f"{label} contains unknown fields")
+
+    check_fields(document, "catalog", "catalog")
     if type(document.get("schema_version")) is not int or document["schema_version"] != 1:
         errors.append("schema_version must be integer 1")
     cases = document.get("cases")
@@ -23,6 +39,7 @@ def validate(document, require_ready=False):
         if not isinstance(case, dict):
             errors.append(f"{prefix} must be an object")
             continue
+        check_fields(case, "case", prefix)
 
         def check(condition, field):
             if not condition:
@@ -31,6 +48,8 @@ def validate(document, require_ready=False):
         def section(name):
             value = case.get(name)
             check(isinstance(value, dict), name)
+            if isinstance(value, dict):
+                check_fields(value, name, f"{prefix}.{name}")
             return value if isinstance(value, dict) else {}
 
         def pattern(value, expression, field, required=False):
@@ -70,6 +89,7 @@ def validate(document, require_ready=False):
         limits = case.get("limits")
         check(isinstance(limits, dict) or limits is None and not ready, "limits")
         if isinstance(limits, dict):
+            check_fields(limits, "limits", f"{prefix}.limits")
             for field in ("wall_seconds", "output_tokens", "tool_calls"):
                 check(type(limits.get(field)) is int and limits[field] > 0, "limits." + field)
         paths = case.get("editable_paths")
