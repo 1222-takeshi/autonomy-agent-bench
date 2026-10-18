@@ -1,0 +1,8 @@
+.cache/
+runs/raw/
+workspaces/
+private/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store

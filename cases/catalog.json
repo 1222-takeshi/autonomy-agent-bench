@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "cases": [
+    {
+      "id": "ALG-001", "track": "algorithm_debug", "status": "draft",
+      "title": "候補: 軌跡補間の角度境界・重複点での不連続を解析する",
+      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/2",
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": null, "kind": "candidate", "license": null},
+      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
+      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
+      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
+      "limits": null, "editable_paths": [],
+      "acceptance": {"normal": "通常の前進軌跡", "edge": "角度の±π境界・重複点・逆走", "invalid": "空入力・不正な間隔", "regression": "既存補間APIと端点の保持"}
+    },
+    {
+      "id": "INT-001", "track": "integration_debug", "status": "draft",
+      "title": "候補: topicは見えるがデータが届かないROS 2通信を解析する",
+      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/3",
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_universe", "revision": null, "kind": "candidate", "license": null},
+      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
+      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
+      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
+      "limits": null, "editable_paths": [],
+      "acceptance": {"normal": "互換QoSでの実データ受信", "edge": "遅延参加と必要なdurability", "invalid": "不一致QoS・誤remapを検出", "regression": "下流のreliability・TF・stamp契約を保持"}
+    },
+    {
+      "id": "FEAT-001", "track": "feature_implementation", "status": "draft",
+      "title": "候補: 停止点を保持する軌跡再サンプリングを実装する",
+      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/4",
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": null, "kind": "candidate", "license": null},
+      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
+      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
+      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
+      "limits": null, "editable_paths": [],
+      "acceptance": {"normal": "所定間隔の出力と停止点保持", "edge": "短区間・複数停止点・逆走", "invalid": "非正間隔・非有限値・空入力", "regression": "既存API・parameter・launchとの互換性"}
+    }
+  ]
+}
