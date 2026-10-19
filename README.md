@@ -34,7 +34,7 @@ python3 -m bench.catalog cases/catalog.json --require-ready
 - [cases/catalog.json](cases/catalog.json): 候補と再現・昇格条件。revision等の未決値はnull。
 - [docs/protocol.md](docs/protocol.md): 入出力、採点、状態遷移、データ境界。
 - `bench/catalog.py` / `tests/`: metadata検査とnormal/edge/invalid/regressionのテスト。
-- GitHub-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。
+- 専用self-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。[運用と公開時の切替](docs/ci.md)。
 
 #2〜#4で固定source・環境・隔離実行・参照修正・誤修正・回帰を用意してからreadyへ進める。
 その後にagent実行runnerと比較対象モデルのrun設定を固定する。現時点でrunner・実ケースbundle・採点器は未実装。
