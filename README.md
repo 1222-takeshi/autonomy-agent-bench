@@ -34,16 +34,16 @@ python3 -m bench.catalog cases/catalog.json --require-ready
 - [cases/catalog.json](cases/catalog.json): 候補と再現・昇格条件。revision等の未決値はnull。
 - [docs/protocol.md](docs/protocol.md): 入出力、採点、状態遷移、データ境界。
 - `bench/catalog.py` / `tests/`: metadata検査とnormal/edge/invalid/regressionのテスト。
-- 専用self-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。[運用と公開時の切替](docs/ci.md)。
+- GitHub-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。[CI運用](docs/ci.md)。
 
 #2〜#4で固定source・環境・隔離実行・参照修正・誤修正・回帰を用意してからreadyへ進める。
 その後にagent実行runnerと比較対象モデルのrun設定を固定する。現時点でrunner・実ケースbundle・採点器は未実装。
 
 ## データと出典
 
-このrepoはprivate。第三者source・rosbag・地図・大きな生成物・raw結果・参照解はcommitしない。
+このrepoはpublic。第三者source・rosbag・地図・大きな生成物・raw結果・参照解はcommitしない。
 取得元、revision、ライセンス、artifactのSHA256を記録し、候補側には問題に必要なsnapshotだけを渡す。
-実車・実ネットワークの設定変更や走行試験を評価に含めない。ライセンスと第三者データの扱いを決めてから公開を検討する。
+実車・実ネットワークの設定変更や走行試験を評価に含めない。LICENSEは未設定。第三者データを追加する場合は出典と利用条件を確認する。
 
 - [Autoware公式インストール手順](https://docs.autoware.org/main/installation/autoware/source-installation/): 対象revisionに合うROS環境を選び、ケースごとに固定する。
 - [ROS 2公式QoS仕様](https://github.com/ros2/ros2_documentation/blob/humble/source/Concepts/Intermediate/About-Quality-of-Service-Settings.rst): 提供/要求の互換性と遅延参加の契約を参照する。
