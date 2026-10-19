@@ -16,7 +16,8 @@
 - candidateへ参照解/隠しテスト/他モデルの解答を渡さない。自己申告のpassを採点結果にしない。
 - 実車・host network・Docker socket・秘密情報をcandidateへ渡さない。
 - 第三者データ、大きな生成物、raw結果、実ホスト名・ユーザー名・絶対パスをcommitしない。
-- CIはGitHub-hostedのみ、permissionsはcontents:read、actionはSHA固定、pull_request_target不使用。
+- CIはprivate repo専用の隔離self-hosted runnerで実行する。permissionsはcontents:read、actionはSHA固定、pull_request_target不使用。
+- runnerへhost mount・Docker socket・GPU・PATを渡さない。public化前にrunner登録を解除し、GitHub-hostedへ切り替える。
 - privateを維持する。公開や第三者データの再配布はユーザーの明示指示を確認してから行う。
 
 ## Checks
