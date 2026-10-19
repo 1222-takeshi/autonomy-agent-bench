@@ -1,6 +1,7 @@
 # Development rules
 
 - ユーザー向け報告とPR descriptionは日本語。Commit message / PR titleは英語。
+- commitとsquash mergeの著者メールにはGitHub noreplyを使い、公開前は履歴の著者・committerメールも確認する。
 - open Issueへ紐付け、origin/main同期後に専用branch/worktreeで変更する。mainへ直接実装しない。
 - 最小の一貫した変更とnormal/edge/invalid/regressionを検証する。原則300行程度、500行超は分割を検討。
 - read-only reviewer 2〜4名でBLOCKING/IMPORTANTが0件になるまでmergeしない。
@@ -16,9 +17,9 @@
 - candidateへ参照解/隠しテスト/他モデルの解答を渡さない。自己申告のpassを採点結果にしない。
 - 実車・host network・Docker socket・秘密情報をcandidateへ渡さない。
 - 第三者データ、大きな生成物、raw結果、実ホスト名・ユーザー名・絶対パスをcommitしない。
-- CIはprivate repo専用の隔離self-hosted runnerで実行する。permissionsはcontents:read、actionはSHA固定、pull_request_target不使用。
-- runnerへhost mount・Docker socket・GPU・PATを渡さない。public化前にrunner登録を解除し、GitHub-hostedへ切り替える。
-- privateを維持する。公開や第三者データの再配布はユーザーの明示指示を確認してから行う。
+- CIはGitHub-hostedで実行する。permissionsはcontents:read、actionはSHA固定、pull_request_target不使用。
+- public repoにself-hosted runnerを登録しない。private時に使った専用runnerの登録を公開前に解除し、containerを停止する。
+- このrepoはpublic。履歴・Issue・PR・Actionsログも公開対象として扱い、秘密情報・非公開データ・参照解を含めない。
 
 ## Checks
 
