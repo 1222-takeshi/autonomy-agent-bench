@@ -13,26 +13,37 @@
       "acceptance": {"normal": "±180°から離れたヨー角変化を従来どおり補間する", "edge": "±180°を両方向にまたぐ補間、同じ回転の別表現、複数区間版", "invalid": "空・未整列・範囲外のkeyを従来どおり例外で拒否する", "regression": "既存テスト全件と一般的な3次元回転の補間結果を保つ"}
     },
     {
-      "id": "INT-001", "track": "integration_debug", "status": "draft",
-      "title": "候補: topicは見えるがデータが届かないROS 2通信を解析する",
-      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/3",
-      "source": {"repository": "https://github.com/autowarefoundation/autoware_universe", "revision": null, "kind": "candidate", "license": null},
-      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
-      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
-      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
-      "limits": null, "editable_paths": [],
-      "acceptance": {"normal": "互換QoSでの実データ受信", "edge": "遅延参加と必要なdurability", "invalid": "不一致QoS・誤remapを検出", "regression": "下流のreliability・TF・stamp契約を保持"}
+      "id": "ALG-002", "track": "algorithm_debug", "status": "ready",
+      "title": "Uターンの復路で軌跡からの横偏差が対向車線ぶんずれる不具合を解析・修正する",
+      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/2",
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": "384bcd47e6d2fd21e5954a915153aa5303b34a53", "kind": "injected", "license": "Apache-2.0"},
+      "runtime": {"image": "aab/alg-002@sha256:14124afddfa1c97d43c3e68fffa23a9c2531835984e2de68f043b56357aa1b1e", "ros_distro": "humble", "rmw": "rmw_fastrtps_cpp", "platform": "linux/amd64", "network": "none"},
+      "artifacts": {"bundle_sha256": "2be1d8678b714bab999591a085f694a6c99bab6f7b028434426d34aa927ab983", "verification_sha256": "755b3fa1298de400f6363df2dedcf397efecde351ad3fa360264dc7dad9dfe57"},
+      "controls": {"baseline": "fail", "reference": "pass", "wrong_patch": "fail", "regression": "pass", "repetitions": 3},
+      "limits": {"wall_seconds": 3600, "output_tokens": 128000, "tool_calls": 200}, "editable_paths": ["src/autoware_motion_utils/src", "src/autoware_motion_utils/include", "src/autoware_motion_utils/test", "ANALYSIS.md"],
+      "acceptance": {"normal": "不等間隔の直線と緩やかな曲線で、最近傍点・最近傍区間・横偏差・弧長を従来どおり返す", "edge": "Uターン・周回路・切り返しの復路側で、横偏差・最近傍点と区間・弧長・縦方向オフセット位置・time_from_start・前後判定を正しく返す。間隔と長さを変えた折り返し軌跡でも同じ", "invalid": "空・1点・全点重複の軌跡は従来どおり例外またはNaNで扱う", "regression": "既存テスト全件、距離とヨー角のしきい値付き姿勢版探索、重複点を含む軌跡の結果を保つ"}
     },
     {
-      "id": "FEAT-001", "track": "feature_implementation", "status": "draft",
-      "title": "候補: 停止点を保持する軌跡再サンプリングを実装する",
+      "id": "INT-001", "track": "integration_debug", "status": "ready",
+      "title": "topicは見えるが下流のポーリング購読に地図が届かないROS 2通信の不具合を解析・修正する",
+      "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/3",
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": "384bcd47e6d2fd21e5954a915153aa5303b34a53", "kind": "injected", "license": "Apache-2.0"},
+      "runtime": {"image": "aab/int-001@sha256:75428231f43e9d357052425439dbb041cc29cff2b5a22e5f8d964cddb7a89a70", "ros_distro": "humble", "rmw": "rmw_fastrtps_cpp", "platform": "linux/amd64", "network": "none"},
+      "artifacts": {"bundle_sha256": "97957969ebcd4e339670d9265f31cc9500e451e12f8c352531652a09a7af19fd", "verification_sha256": "445bef9aa8a9d93fb81777477f987cbcada90c2fba6b7261e24ef09d24f4170c"},
+      "controls": {"baseline": "fail", "reference": "pass", "wrong_patch": "fail", "regression": "pass", "repetitions": 3},
+      "limits": {"wall_seconds": 3600, "output_tokens": 128000, "tool_calls": 200}, "editable_paths": ["src/autoware_component_interface_utils/include", "src/autoware_component_interface_utils/test", "ANALYSIS.md"],
+      "acceptance": {"normal": "参加後に送られた地図・odometryを、別DDS participant間の実通信でポーリング購読(take)が受信し、NodeAdaptorの送信も仕様QoSの購読者に届く", "edge": "TRANSIENT_LOCAL仕様のtopicでは、送信後に参加したポーリング購読(create_subscription(nullptr)・init_sub)も保持された最新の1件を受信する", "invalid": "データが無いときtake()はnullptrを返し値を変えない。仕様と不一致のQoS(TRANSIENT_LOCALへのVOLATILE送信・RELIABLEへのBEST_EFFORT送信)とは接続せずincompatible QoSとして検出され、remap規則にも従う", "regression": "既存テスト全件に加え、BEST_EFFORT仕様のポーリング購読、callback購読の遅延参加、NodeAdaptor送信のlatch保持、take()が最新の1件を返す挙動を保つ"}
+    },
+    {
+      "id": "FEAT-001", "track": "feature_implementation", "status": "ready",
+      "title": "停止点を保持する軌跡再サンプリングを実装する",
       "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/4",
-      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": null, "kind": "candidate", "license": null},
-      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
-      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
-      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
-      "limits": null, "editable_paths": [],
-      "acceptance": {"normal": "所定間隔の出力と停止点保持", "edge": "短区間・複数停止点・逆走", "invalid": "非正間隔・非有限値・空入力", "regression": "既存API・parameter・launchとの互換性"}
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": "384bcd47e6d2fd21e5954a915153aa5303b34a53", "kind": "feature", "license": "Apache-2.0"},
+      "runtime": {"image": "aab/feat-001@sha256:40e23241672db02c05691a6da35cda6d793c11788990243f952197a3028e9472", "ros_distro": "humble", "rmw": "rmw_fastrtps_cpp", "platform": "linux/amd64", "network": "none"},
+      "artifacts": {"bundle_sha256": "6f3379215a1341be562ea81dcef5e6122727509a9d37d08dc05c0bddff7b771d", "verification_sha256": "e95067dc18648448dce1295729e3504d2102fc4983813adcebb27085e98e6ea1"},
+      "controls": {"baseline": "fail", "reference": "pass", "wrong_patch": "fail", "regression": "pass", "repetitions": 3},
+      "limits": {"wall_seconds": 3600, "output_tokens": 128000, "tool_calls": 200}, "editable_paths": ["src/autoware_motion_utils/src", "src/autoware_motion_utils/include", "src/autoware_motion_utils/test", "ANALYSIS.md"],
+      "acceptance": {"normal": "区間指定の再サンプリング（Trajectory・Path・PathWithLaneId）が、既定で入力の最初の停止点を位置・速度0のまま出力に残し、他の点は従来の間隔・補間で出す", "edge": "停止点なし・先頭・末尾・サンプル間・サンプルから0.1 m未満（そのサンプルを移動）・複数のゼロ速度点・経路長を超える間隔・後退走行", "invalid": "2点未満・0.1 m未満の間隔（0・負を含む）・連続する重複点では、オプションの値によらず従来どおり入力をそのまま返す", "regression": "既存テスト全件、停止点のない入力とオプション無効時の出力、弧長指定オーバーロードの挙動を保つ"}
     }
   ]
 }

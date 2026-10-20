@@ -24,5 +24,5 @@
 ## Checks
 
 `python3 -m unittest discover -s tests -v` と `python3 -m bench.catalog cases/catalog.json`、Python構文・JSON・相対リンク・秘密/host/pathの差分検査、`git diff --check`を実行する。
-`--require-ready`は現catalogでは失敗するのが正しい。通すためにdraftをreadyへ書き換えない。
+`--require-ready`はdraftを含むcatalogでは失敗するのが正しい。通すためにdraftをreadyへ書き換えない。
 完了時はIssue/PR/merge commit、変更と目的、Tests/静的解析/Validation/Review、PRサイズ、mainの状態を日本語で報告する。
