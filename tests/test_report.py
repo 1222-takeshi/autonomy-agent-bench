@@ -12,7 +12,7 @@ import bench.report as report
 
 SECRET_ARGV = "sk-live-abc123def456"  # public-check: allow token
 SECRET_ENV = "s3cr3t-env-value-xyz"  # public-check: allow token
-HOST_PATH = "/home/someuser/private/workdir"
+HOST_PATH = "/home/someuser/private/workdir"  # public-check: allow home-path
 NOTES = "infra_error / incomplete runs are listed but not scored (docs/protocol.md)."
 HEADER = (
     "| case | agent | model | runs | pass | task_fail | invalid | infra | incomplete "
