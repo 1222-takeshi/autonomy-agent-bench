@@ -92,6 +92,19 @@ agent 定義の例:
 
 argv にはローカルのパスが入りうるため、`run.json` をそのまま公開しない。
 
+## 集計
+
+```sh
+python3 -m bench.report --runs-dir <runs> [--case ID ...] [--agent NAME ...] [--format md|json] [--out FILE]
+```
+
+`run.json` をケースと agent ごとに集計し、表にする。
+
+- 表の列: 回数、状態ごとの件数、合格率、所要時間・出力 tokens・入力 tokens・tool 回数の中央値。
+- `infra_error` と未完了（`run.json` がない、壊れている）の run は件数に出すが、採点と中央値には含めない（[protocol.md](protocol.md)）。
+- 出力するのは集計値だけで、argv・環境変数・パスは出さない。
+- シンボリックリンクは辿らない。
+
 ## 限界
 
 agent 定義の `argv` を直接 host で動かすと、実モデルの比較に使える隔離にならない。
