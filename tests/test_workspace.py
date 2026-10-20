@@ -167,6 +167,22 @@ class SafeExtractTests(WorkspaceTestCase):
         with self.assertRaises(ValueError):
             ws.safe_extract(tar_path, self.tmp() / "missing", TOP)
 
+    def test_duplicate_member_is_unsafe(self):
+        dest = self.assert_unsafe([_file(TOP + "/a", b"1"), _file(TOP + "/a", b"2")])
+        self.assertEqual(os.listdir(dest), [])
+
+    def test_dot_prefixed_duplicate_is_unsafe(self):
+        dest = self.assert_unsafe([_file(TOP + "/a", b"1"), _file("./" + TOP + "/a", b"2")])
+        self.assertEqual(os.listdir(dest), [])
+
+    def test_file_then_directory_with_same_name_is_unsafe(self):
+        dest = self.assert_unsafe([_file(TOP + "/a", b"1"), _dir(TOP + "/a")])
+        self.assertEqual(os.listdir(dest), [])
+
+    def test_member_below_a_file_member_is_unsafe(self):
+        dest = self.assert_unsafe([_file(TOP + "/a", b"1"), _file(TOP + "/a/b", b"2")])
+        self.assertEqual(os.listdir(dest), [])
+
 
 class SnapshotTests(WorkspaceTestCase):
     def test_regular_files_hashed_with_posix_keys(self):
@@ -362,6 +378,39 @@ class MakePatchTests(WorkspaceTestCase):
         positions = [out.index(name) for name in ("b/a_add.txt", "b/m.txt", "a/z_del.txt")]
         self.assertEqual(positions, sorted(positions))
         self.assertEqual(out, self.patch(deleted=["z_del.txt"], added=["a_add.txt"], modified=["m.txt"]))
+
+    def test_exact_unified_diff_for_simple_modification(self):
+        base, work = self.tmp(), self.tmp()
+        _write(base, "f", b"a\nb\n")
+        _write(work, "f", b"a\nc\n")
+        patch = ws.make_patch(base, work, {"added": [], "modified": ["f"], "deleted": []})
+        self.assertEqual(patch, "--- a/f\n+++ b/f\n@@ -1,2 +1,2 @@\n a\n-b\n+c\n")
+
+    def test_exact_no_newline_markers_on_both_sides(self):
+        base, work = self.tmp(), self.tmp()
+        _write(base, "f", b"x")
+        _write(work, "f", b"y")
+        patch = ws.make_patch(base, work, {"added": [], "modified": ["f"], "deleted": []})
+        marker = "\\ No newline at end of file\n"
+        self.assertEqual(patch, "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-x\n" + marker + "+y\n" + marker)
+
+    def test_patch_size_limit_is_bounded(self):
+        self.assertIsInstance(ws.PATCH_MAX_BYTES, int)
+        self.assertGreaterEqual(ws.PATCH_MAX_BYTES, 64 * 1024)
+        self.assertLessEqual(ws.PATCH_MAX_BYTES, 4 * 1024 * 1024)
+
+    def test_large_modified_file_is_not_diffed(self):
+        base, work = self.tmp(), self.tmp()
+        _write(base, "big.txt", b"a\n")
+        _write(work, "big.txt", b"b\n" * (ws.PATCH_MAX_BYTES // 2 + 1))
+        patch = ws.make_patch(base, work, {"added": [], "modified": ["big.txt"], "deleted": []})
+        self.assertEqual(patch, "Large file big.txt not diffed\n")
+
+    def test_large_deleted_file_is_not_diffed(self):
+        base, work = self.tmp(), self.tmp()
+        _write(base, "big.txt", b"a\n" * (ws.PATCH_MAX_BYTES // 2 + 1))
+        patch = ws.make_patch(base, work, {"added": [], "modified": [], "deleted": ["big.txt"]})
+        self.assertEqual(patch, "Large file big.txt not diffed\n")
 
 
 class ApplyChangesTests(WorkspaceTestCase):

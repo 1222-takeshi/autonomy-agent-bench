@@ -1,11 +1,9 @@
 """Pure file-tree helpers shared by the runner core.
 
 This module never launches a process or a container: it extracts hash-pinned
-bundle tars, snapshots a workspace, diffs two snapshots, decides whether an edit
-is inside the editable paths, and builds/applies a text patch. It is the
-low-level material ``bench.run`` needs to rebuild a clean grading workspace from
-the agent's accepted changes. All helpers are plain functions and stay side
-effect free apart from the files they are explicitly asked to read or write.
+bundle tars, snapshots a workspace, diffs snapshots, decides whether an edit is
+inside the editable paths, and builds/applies a text patch. Helpers are plain
+functions and stay side effect free apart from the files read or written.
 """
 import difflib
 import hashlib
@@ -17,6 +15,7 @@ from pathlib import Path
 
 IGNORED_TOP = frozenset({"build", "install", "log"})   # colcon outputs, ignored only at the workspace root
 IGNORED_ANY = frozenset({".git"})                       # ignored at any depth
+PATCH_MAX_BYTES = 256 * 1024                            # cap on a single file's bytes before skipping its diff
 
 
 class UnsafeBundle(ValueError):
@@ -26,8 +25,7 @@ class UnsafeBundle(ValueError):
 def sha256_file(path) -> str:
     """Lowercase hex sha256 over the raw bytes of ``path``.
 
-    Propagates ``OSError`` for a missing or unreadable file so the caller can
-    distinguish a changed bundle from a merely absent one.
+    Propagates ``OSError`` for a missing or unreadable file.
     """
     digest = hashlib.sha256()
     with open(str(path), "rb") as handle:
@@ -36,13 +34,14 @@ def sha256_file(path) -> str:
     return digest.hexdigest()
 
 
-def _strip_top(name, top):
-    """Return the member path relative to ``top`` (or None for ``top`` itself)."""
+def _normalize_rel(name, top):
+    """``name`` components relative to ``top``; leading ``./`` stripped, empty/dot components dropped."""
     if name.startswith("./"):
         name = name[2:]
     if name == top:
-        return None
-    return name[len(top) + 1:].rstrip("/")
+        return ()
+    rel = name[len(top) + 1:]
+    return tuple(component for component in rel.split("/") if component not in ("", "."))
 
 
 def _validate_member(member, top):
@@ -58,12 +57,11 @@ def _validate_member(member, top):
 
 
 def safe_extract(tar_path, dest, top) -> None:
-    """Extract ``tar_path`` into the empty directory ``dest`` under ``top``.
+    """Extract ``tar_path`` into empty ``dest`` under ``top``.
 
-    Every member is validated before anything is written, so an unsafe bundle
-    leaves ``dest`` untouched. The leading ``top/`` is stripped and file modes
-    collapse to 0o755 (any execute bit) or 0o644; ownership and mtimes are not
-    restored. ``dest`` must exist and be empty, otherwise ``ValueError``.
+    Every member is validated before writing, so an unsafe bundle leaves
+    ``dest`` untouched. File modes collapse to 0o755 (any execute bit) or
+    0o644; ownership and mtimes are not restored.
     """
     if not os.path.isdir(str(dest)) or os.listdir(str(dest)):
         raise ValueError("dest must be an existing empty directory")
@@ -71,11 +69,27 @@ def safe_extract(tar_path, dest, top) -> None:
         members = tar.getmembers()
         for member in members:
             _validate_member(member, top)
+        # Normalise paths before writing and reject any duplicate location.
+        norms = []
+        seen = set()
         for member in members:
-            rel = _strip_top(member.name, top)
-            if rel is None:
+            norm = _normalize_rel(member.name, top)
+            if norm in seen:
+                raise UnsafeBundle("duplicate path in bundle: " + member.name)
+            seen.add(norm)
+            norms.append((norm, member))
+        # Reject a member lying below a path another member declares as a file.
+        for norm, member in norms:
+            if not member.isfile() or not norm:
                 continue
-            dest_path = os.path.join(str(dest), *rel.split("/"))
+            for other_norm, _other in norms:
+                if len(other_norm) > len(norm) and other_norm[:len(norm)] == norm:
+                    raise UnsafeBundle("member below file: " + member.name)
+        # Writing pass, reusing the normalised relative path computed above.
+        for norm, member in norms:
+            if not norm:
+                continue
+            dest_path = os.path.join(str(dest), *norm)
             if member.isdir():
                 os.makedirs(dest_path, mode=0o755, exist_ok=True)
             else:
@@ -196,6 +210,14 @@ def _nonregular(path) -> bool:
         return False
 
 
+def _oversize(path) -> bool:
+    """True iff ``path`` exists and exceeds ``PATCH_MAX_BYTES`` (via ``lstat``)."""
+    try:
+        return os.lstat(str(path)).st_size > PATCH_MAX_BYTES
+    except OSError:
+        return False
+
+
 def _diff_lines(old_lines, new_lines, fromfile, tofile):
     out = []
     for line in difflib.unified_diff(old_lines, new_lines, fromfile, tofile):
@@ -209,9 +231,9 @@ def make_patch(base_root, workspace, changes) -> str:
     """Deterministic unified text patch describing ``changes`` (base -> workspace).
 
     Paths are processed in sorted order; the empty change set yields "". Each
-    non-regular workspace entry yields ``Non-regular file <path>``, invalid
-    UTF-8 yields the ``Binary files ... differ`` line, otherwise a unified diff
-    is produced with ``/dev/null`` on the missing side.
+    non-regular entry yields ``Non-regular file <path>``, oversized files yield
+    ``Large file <path> not diffed``, invalid UTF-8 yields a ``Binary files``
+    line, otherwise a unified diff with ``/dev/null`` on the missing side.
     """
     added, modified, deleted = set(changes["added"]), set(changes["modified"]), set(changes["deleted"])
     paths = sorted(added | modified | deleted)
@@ -223,12 +245,18 @@ def make_patch(base_root, workspace, changes) -> str:
             if _nonregular(workspace / path):
                 out.append("Non-regular file %s\n" % path)
                 continue
+            if _oversize(workspace / path):
+                out.append("Large file %s not diffed\n" % path)
+                continue
             if not _valid_utf8(_read_bytes(workspace / path)):
                 out.append("Binary files /dev/null and b/%s differ\n" % path)
                 continue
             new_lines = _read_bytes(workspace / path).decode("utf-8").splitlines(keepends=True)
             out.extend(_diff_lines([], new_lines, "/dev/null", "b/" + path))
         elif path in deleted:
+            if _oversize(base_root / path):
+                out.append("Large file %s not diffed\n" % path)
+                continue
             old_bytes = _read_bytes(base_root / path)
             if not _valid_utf8(old_bytes):
                 out.append("Binary files a/%s and /dev/null differ\n" % path)
@@ -238,6 +266,9 @@ def make_patch(base_root, workspace, changes) -> str:
         else:
             if _nonregular(workspace / path):
                 out.append("Non-regular file %s\n" % path)
+                continue
+            if _oversize(base_root / path) or _oversize(workspace / path):
+                out.append("Large file %s not diffed\n" % path)
                 continue
             old_bytes, new_bytes = _read_bytes(base_root / path), _read_bytes(workspace / path)
             if not _valid_utf8(old_bytes) or not _valid_utf8(new_bytes):
@@ -253,7 +284,7 @@ def apply_changes(workspace, changes, dest) -> None:
     """Apply accepted additions/modifications to ``dest`` and remove deletions.
 
     Source must be a regular file; a symlink or other non-regular entry raises
-    ``ValueError`` so callers need only run ``check_editable`` beforehand.
+    ``ValueError``.
     """
     for path in changes["added"] + changes["modified"]:
         source = workspace / path
@@ -261,8 +292,7 @@ def apply_changes(workspace, changes, dest) -> None:
             raise ValueError("cannot apply non-regular file: " + path)
         dest_path = dest / path
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(str(dest_path), "wb") as out:
-            out.write(_read_bytes(source))
+        shutil.copyfile(str(source), str(dest_path))
         os.chmod(dest_path, 0o755 if os.lstat(str(source)).st_mode & 0o111 else 0o644)
     for path in changes["deleted"]:
         dest_path = dest / path
