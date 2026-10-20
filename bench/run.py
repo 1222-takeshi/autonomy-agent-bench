@@ -460,6 +460,7 @@ def _run_and_inspect(ctx, case, agent, workspace_dir, limits, args):
         "BENCH_USAGE_FILE": str(run_dir / "usage.json"),
         "BENCH_IMAGE": ctx["image"],
         "BENCH_PACKAGE": ctx["package"],
+        "BENCH_EDITABLE_PATHS": json.dumps(case["editable_paths"]),
         "BENCH_WALL_SECONDS": str(limits["wall_seconds"]),
         "BENCH_OUTPUT_TOKENS": str(limits["output_tokens"]),
         "BENCH_TOOL_CALLS": str(limits["tool_calls"]),

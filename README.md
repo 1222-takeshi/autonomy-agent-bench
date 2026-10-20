@@ -35,12 +35,13 @@ python3 -m bench.catalog cases/catalog.json --require-ready
 - [docs/protocol.md](docs/protocol.md): 入出力、採点、状態遷移、データ境界。
 - [docs/verify.md](docs/verify.md): 隔離containerで1パッケージを構築・テストする採点controller。
 - [docs/runner.md](docs/runner.md): readyケースを1回agentに解かせ、編集範囲・予算・改変を確かめて採点し、実行記録を残すrunner。
+- [docs/sandbox.md](docs/sandbox.md): 実モデルのagentを、外へはモデルのendpointにしか出られないcontainerで動かすlauncherと中継。
 - `bench/catalog.py` / `tests/`: metadata検査とnormal/edge/invalid/regressionのテスト。
 - GitHub-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。[CI運用](docs/ci.md)。
 
 #2〜#4で固定source・環境・隔離実行・参照修正・誤修正・回帰を用意してからreadyへ進める（ALG-001は完了）。
 ALG-001の候補bundle・採点用テスト・参照修正・検証記録はrepo外に保管し、catalogにはSHA256だけを記録する。
-runnerは台本どおりに動くcontrolで採点境界を確かめる段階。実モデルの比較の前に、agentを別ユーザーのcontainerで動かす隔離と、比較対象モデルのrun設定を固定する。
+実モデルはsandboxのcontainerで動かす。比較の前に、隔離の検証（逃げる子プロセス・時間切れ・改ざん）と比較対象モデルのrun設定を固定する。
 
 ## データと出典
 

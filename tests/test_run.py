@@ -53,7 +53,7 @@ elif mode == "ignoreterm":
 elif mode == "env":
     bad = [k for k in ("BENCH_CASE_ID", "BENCH_RUN_ID", "BENCH_WORKSPACE", "BENCH_TASK_FILE", "BENCH_USAGE_FILE",
                        "BENCH_IMAGE", "BENCH_PACKAGE", "BENCH_WALL_SECONDS", "BENCH_OUTPUT_TOKENS",
-                       "BENCH_TOOL_CALLS") if k not in os.environ]
+                       "BENCH_TOOL_CALLS", "BENCH_EDITABLE_PATHS") if k not in os.environ]
     e = os.environ
     if "RUNNER_TEST_SECRET" in e: bad.append("leak")
     if e.get("BENCH_CASE_ID") != "ALG-001" or e.get("BENCH_PACKAGE") != "pkg": bad.append("values")
@@ -61,6 +61,9 @@ elif mode == "env":
     if not e.get("BENCH_IMAGE", "").startswith("sha256:"): bad.append("image")
     if os.path.realpath(e.get("BENCH_WORKSPACE", "")) != os.path.realpath(os.getcwd()): bad.append("cwd")
     if not os.path.isfile(e.get("BENCH_TASK_FILE", "")): bad.append("task")
+    try:
+        if json.loads(e.get("BENCH_EDITABLE_PATHS", "")) != ["src/pkg/src", "src/pkg/test", "ANALYSIS.md"]: bad.append("editable")
+    except ValueError: bad.append("editable")
     open(e["OUT_FILE"], "w").write("ok" if not bad else "bad " + ",".join(bad))
 elif mode == "hidden":
     found = [r for r, _, fs in os.walk(".") if "test_hidden_grader.cpp" in fs]
