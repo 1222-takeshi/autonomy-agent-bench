@@ -13,6 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def fixture(ready=False):
     case = copy.deepcopy(json.loads((ROOT / "cases/catalog.json").read_text())["cases"][0])
+    # Start from an unpinned draft so the fixture does not depend on the catalog's current state.
+    case.update(status="draft", limits=None, editable_paths=[])
+    case["source"].update(revision=None, kind="candidate", license=None)
+    for section in ("runtime", "artifacts", "controls"):
+        case[section] = dict.fromkeys(case[section])
     if ready:
         case.update(status="ready", editable_paths=["src/trajectory.cpp"], limits={"wall_seconds":60,"output_tokens":4096,"tool_calls":8})
         case["source"].update(revision="a"*40, kind="injected", license="Apache-2.0")
@@ -28,11 +33,13 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(validate(fixture(), require_ready=True))
         self.assertEqual(validate(fixture(True), require_ready=True), [])
 
-    def test_catalog_has_three_draft_tracks(self):
+    def test_catalog_tracks_and_statuses(self):
         catalog = json.loads((ROOT / "cases/catalog.json").read_text())
         self.assertEqual(validate(catalog), [])
         self.assertEqual({c["track"] for c in catalog["cases"]}, {"algorithm_debug","integration_debug","feature_implementation"})
-        self.assertTrue(all(c["status"] == "draft" for c in catalog["cases"]))
+        self.assertEqual({c["id"]: c["status"] for c in catalog["cases"]}, {"ALG-001":"ready","INT-001":"draft","FEAT-001":"draft"})
+        ready = [c for c in catalog["cases"] if c["status"] == "ready"]
+        self.assertEqual(validate({"schema_version":1,"cases":ready}, require_ready=True), [])
 
     def test_invalid_structure_and_duplicate(self):
         for document in [[], {}, {"schema_version":True,"cases":[]}, {"schema_version":1,"cases":[None]}]:
