@@ -21,22 +21,36 @@ agent 定義の `argv` を launcher にする。
 ```json
 {"name": "claude-code-<model>",
  "argv": ["python3", "<repo>/bench/sandbox.py",
-          "--agent-image", "aab/agent-claude:<tag>", "--egress-image", "<採点 image のタグ>",
+          "--agent-image", "aab/agent-claude:{case}", "--egress-image", "<採点 image のタグ>",
           "--endpoint", "http://<endpoint-host>:<port>", "--key-file", "<key file（権限 600）>",
           "--model", "<model id>", "--max-turns", "200"],
  "info": {"model": "<model id>", "client": "claude-code <版>"}}
 ```
 
-- agent の image は `cases/env/agent-claude/Dockerfile` から作る。
+- `--agent-image` の `{case}` は、実行するケースの ID を小文字にしたものに置き換わる（例: `aab/agent-claude:feat-001`）。ケースごとに採点 image が違うため、agent の image もケースごとに作る。
+- agent の image は `cases/env/agent-claude/Dockerfile` から、そのケースの採点 image を `BASE_IMAGE` にして作る。
   - 土台は採点 image で、ROS 2 と colcon を含む。
   - Node と Claude Code の版を固定し、Node の tarball は SHA256 で検証する。
 - ビルドの前に、`BASE_IMAGE` に渡すタグが catalog の image ID を指すことを確かめる。
+
+### endpoint と認証の組み合わせ
+
+| 受験するモデル | `--endpoint` | `--auth-style` | `--client-auth` | `--key-file` の中身 |
+|---|---|---|---|---|
+| Spark のローカルモデル（vLLM のゲート） | `http://<endpoint-host>:<port>` | `both`（既定） | `api-key`（既定） | ゲートの key |
+| Anthropic API（API key） | `https://api.anthropic.com` | `x-api-key` | `api-key` | API key |
+| Anthropic（サブスクリプション） | `https://api.anthropic.com` | `bearer` | `oauth` | `claude setup-token` で発行したトークン |
+
+- `https` の endpoint では、egress が TLS で接続する。証明書とホスト名は image の CA で検証する。
+- agent の container が持つ認証情報は、どの組み合わせでもダミーの値だけ。
+  - `api-key` では `ANTHROPIC_API_KEY`、`oauth` では `CLAUDE_CODE_OAUTH_TOKEN` にダミーを入れる。
+  - egress が、受け取った `Authorization` と `x-api-key` を捨て、`--auth-style` の形で本物を差し込む。
 
 ## 隔離の内容
 
 | 対象 | 設定 |
 |---|---|
-| 通信 | agent は `--internal` のネットワークだけに属する。名前解決もインターネットも Tailscale も届かない。出口は `egress:18888` だけ |
+| 通信 | agent は `--internal` のネットワークだけに属する。名前解決もインターネットも Tailscale も届かない。出口は `egress:18888` だけで、その先は `--endpoint` の 1 か所に固定 |
 | key | 本物の key は egress の container だけが読み取り専用で持つ。agent はダミーの key を送り、egress が差し替える。ログにも agent にも key は出ない |
 | 中継の制限 | origin-form の HTTP/1.x だけを通す。1 接続 1 リクエストで、`TRACE`・`CONNECT` などは拒否する。同時接続は 64 まで |
 | ファイル | agent に mount するのは workspace（`/work`）と、読み取り専用のプロンプトだけ。host のホーム、非公開の cache、他の run は見えない |

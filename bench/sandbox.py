@@ -20,11 +20,17 @@ SCHEMA_VERSION = 1
 RULES_VERSION = 1
 EGRESS_PORT = 18888
 DUMMY_KEY = "sk-bench-dummy"  # public-check: allow token
+DUMMY_OAUTH_TOKEN = "sk-ant-oat01-bench-dummy"  # public-check: allow token
+CLIENT_AUTHS = ("api-key", "oauth")
 AGENT_TOOLS = "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
 DENIED_TOOLS = ("WebFetch", "WebSearch")
 
 RUN_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-ENDPOINT_RE = re.compile(r"^http://(?P<host>[A-Za-z0-9.-]+):(?P<port>[0-9]+)(?:/)?$")
+AUTH_STYLES = ("both", "x-api-key", "bearer")
+ENDPOINT_RE = re.compile(r"^(?P<scheme>http|https)://"
+                         r"(?P<host>[A-Za-z0-9.-]+)"
+                         r"(?::(?P<port>[0-9]+))?"
+                         r"(?:/)?$")
 
 USAGE_KEYS = ("output_tokens", "input_tokens", "num_turns", "result_subtype", "is_error")
 
@@ -110,21 +116,41 @@ def names(run_id):
 
 
 def parse_endpoint(url):
-    """Return ``(host, port_int)`` for ``http://HOST:PORT``/; a bad URL raises."""
+    """Return ``(scheme, host, port)`` for ``http://`` or ``https://`` URLs.
+
+    ``https`` ports default to 443; ``http`` ports are required. A path,
+    user-info, out-of-range port or anything else raises ``UsageError``.
+    """
     match = ENDPOINT_RE.fullmatch(url or "")
     if not match:
         raise UsageError("invalid endpoint: " + repr(url))
-    port = int(match.group("port"))
+    scheme = match.group("scheme")
+    host = match.group("host")
+    port_str = match.group("port")
+    if scheme == "https":
+        port = 443 if port_str is None else int(port_str)
+    else:
+        if port_str is None:
+            raise UsageError("invalid endpoint: " + repr(url))
+        port = int(port_str)
     if not 1 <= port <= 65535:
         raise UsageError("invalid port in endpoint: " + repr(url))
-    return (match.group("host"), port)
+    return (scheme, host, port)
 
 
-def egress_argv(names, egress_image, egress_src, key_file, upstream):
-    """Return the ``docker run`` argv for the egress gateway container."""
+def egress_argv(names, egress_image, egress_src, key_file, upstream,
+                auth_style="both"):
+    """Return the ``docker run`` argv for the egress gateway container.
+
+    ``upstream`` is ``(scheme, host, port)``; the route flag is ``--https`` for
+    ``https`` and ``--http`` otherwise. ``--auth-style`` always follows the key
+    file, which makes runs self-describing. HTTPS upstreams rely on the image's
+    system CA store, so no ``--ca-file`` is passed.
+    """
     if (not os.path.isabs(egress_src)) or (not os.path.isabs(key_file)):
         raise UsageError("egress source and key file must be absolute")
-    host, port = upstream
+    scheme, host, port = upstream
+    route_flag = "--https" if scheme == "https" else "--http"
     return [
         "docker", "run", "-d", "--rm", "--name", names["egress"],
         "--network", names["network"],
@@ -136,17 +162,23 @@ def egress_argv(names, egress_image, egress_src, key_file, upstream):
         "--mount", "type=bind,source=%s,target=/run/egress/key,readonly" % key_file,
         egress_image, "python3", "/opt/egress.py",
         "--bind", "0.0.0.0",
-        "--http", "%d=%s:%d" % (EGRESS_PORT, host, port),
+        route_flag, "%d=%s:%d" % (EGRESS_PORT, host, port),
         "--key-file", "/run/egress/key",
+        "--auth-style", auth_style,
     ]
 
 
 def agent_argv(names, agent_image, workspace, prompt_file, model, max_turns,
-               memory="8g", cpus="4"):
+               memory="8g", cpus="4", client_auth="api-key"):
     """Return the ``docker run`` argv for the agent container."""
     if (not os.path.isabs(workspace)) or (not os.path.isabs(prompt_file)):
         raise UsageError("workspace and prompt file must be absolute")
+    if client_auth not in CLIENT_AUTHS:
+        raise UsageError("unknown client_auth: " + repr(client_auth))
     command = client_command(model, max_turns)
+    client_env = ("CLAUDE_CODE_OAUTH_TOKEN=" + DUMMY_OAUTH_TOKEN
+                  if client_auth == "oauth"
+                  else "ANTHROPIC_API_KEY=" + DUMMY_KEY)
     return [
         "docker", "run", "--rm", "-i", "--name", names["agent"],
         "--network", names["network"],
@@ -159,7 +191,7 @@ def agent_argv(names, agent_image, workspace, prompt_file, model, max_turns,
         "--mount", "type=bind,source=%s,target=/run/task/PROMPT.md,readonly" % prompt_file,
         "-w", "/work",
         "-e", "ANTHROPIC_BASE_URL=http://egress:18888",
-        "-e", "ANTHROPIC_API_KEY=" + DUMMY_KEY,
+        "-e", client_env,
         "-e", "HOME=/home/bench",
         "-e", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16384",
         "-e", "API_TIMEOUT_MS=900000",
@@ -278,6 +310,27 @@ def _egress_ready(docker, name):
     return False
 
 
+_CASE_PLACEHOLDER = "{case}"
+
+
+def _resolve_agent_image(agent_image, env):
+    """Return ``agent_image`` with ``{case}`` replaced by the lowercased case id.
+
+    When the image contains the placeholder it is expanded from
+    ``BENCH_CASE_ID`` so each case gets its own grading image; a missing or
+    empty id raises ``UsageError`` before any docker call. Without the
+    placeholder the image is returned unchanged.
+    """
+    if _CASE_PLACEHOLDER not in agent_image:
+        return agent_image
+    case_id = env.get("BENCH_CASE_ID")
+    if not case_id:
+        raise UsageError(
+            "BENCH_CASE_ID is required when --agent-image contains "
+            + repr(_CASE_PLACEHOLDER))
+    return agent_image.replace(_CASE_PLACEHOLDER, case_id.lower())
+
+
 def run_sandbox(args, env, docker=subprocess.run, popen=subprocess.Popen, out=sys.stdout):
     """Read ``BENCH_*``, build the network, run the egress gateway and agent,
     capture the transcript, write the usage file, tear everything down, restore
@@ -289,6 +342,7 @@ def run_sandbox(args, env, docker=subprocess.run, popen=subprocess.Popen, out=sy
     for name in ("BENCH_EDITABLE_PATHS", "BENCH_WALL_SECONDS", "BENCH_TOOL_CALLS"):
         if not env.get(name):
             raise UsageError("missing " + name)
+    args.agent_image = _resolve_agent_image(args.agent_image, env)
     run_id = env["BENCH_RUN_ID"]
     workspace = env["BENCH_WORKSPACE"]
     task_file = env["BENCH_TASK_FILE"]
@@ -319,7 +373,7 @@ def run_sandbox(args, env, docker=subprocess.run, popen=subprocess.Popen, out=sy
                 raise RuntimeError("network create failed")
             if _docker(docker, egress_argv(
                     names_obj, args.egress_image, _egress_src(), args.key_file,
-                    parse_endpoint(args.endpoint)), 120):
+                    parse_endpoint(args.endpoint), args.auth_style), 120):
                 raise RuntimeError("egress start failed")
             if _docker(docker, ["docker", "network", "connect", "bridge", names_obj["egress"]], 120):
                 raise RuntimeError("network connect failed")
@@ -327,7 +381,8 @@ def run_sandbox(args, env, docker=subprocess.run, popen=subprocess.Popen, out=sy
                 raise RuntimeError("egress did not become ready")
             proc = popen(agent_argv(
                 names_obj, args.agent_image, workspace, str(prompt_path),
-                args.model, args.max_turns, args.memory, args.cpus),
+                args.model, args.max_turns, args.memory, args.cpus,
+                getattr(args, "client_auth", "api-key")),
                 stdout=subprocess.PIPE, text=True)
             state["proc"] = proc
             for line in proc.stdout:
@@ -369,12 +424,20 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="python3 -m bench.sandbox",
         description="Isolate a model run inside a private Docker network.")
-    parser.add_argument("--agent-image", required=True)
+    parser.add_argument("--agent-image", required=True,
+                        help="Agent image, e.g. aab/agent-claude:{case}. The "
+                             "{case} placeholder is replaced with BENCH_CASE_ID "
+                             "(lowercased) before the run.")
     parser.add_argument("--egress-image", required=True)
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--key-file", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--max-turns", type=int, required=True)
+    parser.add_argument("--auth-style", choices=AUTH_STYLES, default="both")
+    parser.add_argument("--client-auth", choices=CLIENT_AUTHS, default="api-key",
+                        help="Agent client auth mode. For 'oauth' the agent container gets a "
+                             "dummy OAuth token; also pass --auth-style bearer so the egress "
+                             "serves bearer auth.")
     parser.add_argument("--memory", default="8g")
     parser.add_argument("--cpus", default="4")
     try:

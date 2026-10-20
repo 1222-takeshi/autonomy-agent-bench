@@ -5,6 +5,8 @@ import shutil
 import signal
 import socket
 import socketserver
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -236,6 +238,11 @@ class RewriteHeadTests(unittest.TestCase):
             "no colon": b"GET / HTTP/1.1\r\nHost a\r\n\r\n",
             "obs-fold space": b"GET / HTTP/1.1\r\nX-A: b\r\n continued\r\n\r\n",
             "obs-fold tab": b"GET / HTTP/1.1\r\nX-A: b\r\n\tcontinued\r\n\r\n",
+            "space before colon (auth)": b"GET / HTTP/1.1\r\nAuthorization : Bearer smuggled\r\n\r\n",
+            "tab before colon (key)": b"GET / HTTP/1.1\r\nx-api-key\t: smuggled\r\n\r\n",
+            "space before colon (host)": b"GET / HTTP/1.1\r\nHost : evil.example\r\n\r\n",
+            "space inside name": b"GET / HTTP/1.1\r\nX A: b\r\n\r\n",
+            "empty name": b"GET / HTTP/1.1\r\n: b\r\n\r\n",
             "trace method": b"TRACE / HTTP/1.1\r\nHost: a\r\n\r\n",
             "unknown method": b"BREW / HTTP/1.1\r\nHost: a\r\n\r\n",
         }
@@ -243,6 +250,51 @@ class RewriteHeadTests(unittest.TestCase):
             with self.subTest(name):
                 with self.assertRaises(ValueError):
                     self.rewrite(head)
+
+
+class RewriteHeadAuthStyleTests(unittest.TestCase):
+    HEAD = request_head("Host: client.local", "Authorization: Bearer " + CLIENT_KEY,
+                        "x-api-key: " + CLIENT_KEY, "Accept: */*")
+    STYLES = {
+        "both": ["Authorization: Bearer " + REAL_KEY, "x-api-key: " + REAL_KEY],
+        "x-api-key": ["x-api-key: " + REAL_KEY],
+        "bearer": ["Authorization: Bearer " + REAL_KEY],
+    }
+
+    def test_auth_styles_constant(self):
+        self.assertEqual(tuple(egress.AUTH_STYLES), ("both", "x-api-key", "bearer"))
+
+    def test_each_style_injects_exact_trailing_headers_in_order(self):
+        for style, auth in self.STYLES.items():
+            with self.subTest(style=style):
+                out = egress.rewrite_head(self.HEAD, REAL_KEY, "up.example", 8080, auth_style=style)
+                self.assertEqual(header_lines(out)[1:],
+                                 ["Accept: */*", "Host: up.example:8080"] + auth + ["Connection: close"])
+                self.assertNotIn(CLIENT_KEY.encode(), out)
+
+    def test_auth_style_may_be_positional(self):
+        out = egress.rewrite_head(self.HEAD, REAL_KEY, "up.example", 8080, "bearer")
+        self.assertEqual(header_lines(out)[-2:], ["Authorization: Bearer " + REAL_KEY, "Connection: close"])
+
+    def test_default_style_is_both(self):
+        self.assertEqual(egress.rewrite_head(self.HEAD, REAL_KEY, "h", 1),
+                         egress.rewrite_head(self.HEAD, REAL_KEY, "h", 1, auth_style="both"))
+
+    def test_unknown_style_raises(self):
+        for bad in ("basic", "", "BOTH", None):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                egress.rewrite_head(self.HEAD, REAL_KEY, "h", 1, auth_style=bad)
+
+    def test_default_port_is_omitted_from_host(self):
+        out = egress.rewrite_head(self.HEAD, REAL_KEY, "api.example", 443, default_port=443)
+        self.assertIn("Host: api.example", header_lines(out))
+        self.assertNotIn(b"api.example:443", out)
+
+    def test_non_default_port_stays_in_host(self):
+        out = egress.rewrite_head(self.HEAD, REAL_KEY, "api.example", 8443, default_port=443)
+        self.assertIn("Host: api.example:8443", header_lines(out))
+        out = egress.rewrite_head(self.HEAD, REAL_KEY, "api.example", 443)
+        self.assertIn("Host: api.example:443", header_lines(out))
 
 
 class RelayTests(unittest.TestCase):
@@ -560,6 +612,124 @@ class GatewayTests(unittest.TestCase):
             self.assertNotIn(secret, log)
 
 
+@unittest.skipUnless(shutil.which("openssl"), "openssl CLI is required")
+class HttpsGatewayTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = Path(tempfile.mkdtemp())
+        cls.addClassCleanup(shutil.rmtree, cls.dir, ignore_errors=True)
+        ca_key, cls.ca, key, csr, cls.cert = (str(cls.dir / name) for name in
+                                              ("ca.key", "ca.pem", "srv.key", "srv.csr", "srv.pem"))
+        ext = cls.dir / "ext.cnf"
+        ext.write_text("subjectAltName=DNS:localhost\n")
+
+        def openssl(*args):
+            subprocess.run(("openssl",) + args, check=True, capture_output=True, timeout=30)
+
+        openssl("req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", ca_key, "-out", cls.ca,
+                "-days", "2", "-subj", "/CN=bench-test-ca")
+        openssl("req", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", csr, "-subj", "/CN=localhost")
+        openssl("x509", "-req", "-in", csr, "-CA", cls.ca, "-CAkey", ca_key, "-CAcreateserial", "-out", cls.cert,
+                "-days", "2", "-extfile", str(ext))
+        cls.key = key
+
+    def setUp(self):
+        self.stderr = io.StringIO()
+        patcher = mock.patch.object(sys, "stderr", self.stderr)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def tls_upstream(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(self.cert, self.key)
+        requests = []
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        listener.settimeout(0.2)
+        stop = threading.Event()
+
+        def serve():
+            while not stop.is_set():
+                try:
+                    raw, _ = listener.accept()
+                except OSError:
+                    continue
+                try:
+                    raw.settimeout(TIMEOUT)
+                    with context.wrap_socket(raw, server_side=True) as conn:
+                        buffer = b""
+                        while b"\r\n\r\n" not in buffer:
+                            data = conn.recv(4096)
+                            if not data:
+                                break
+                            buffer += data
+                        requests.append(buffer)
+                        conn.sendall(OK_RESPONSE)
+                except OSError:
+                    pass  # the handshake fails when the client rejects the certificate
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        self.addCleanup(listener.close)
+        self.addCleanup(thread.join, 3)
+        self.addCleanup(stop.set)
+        return requests, listener.getsockname()[1]
+
+    def gateway(self, port, **kwargs):
+        servers = egress.start("127.0.0.1", [], [], REAL_KEY, 5, 65536,
+                               https_routes=[(0, "localhost", port)], **kwargs)
+        for server in servers:
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+        return servers[0].server_address[1]
+
+    def get(self):
+        request = request_head("Host: agent.local", "Authorization: Bearer " + CLIENT_KEY,
+                               "x-api-key: " + CLIENT_KEY, request_line="GET /v1/messages HTTP/1.1")
+        with socket.create_connection(("127.0.0.1", self.port), timeout=TIMEOUT) as sock:
+            sock.sendall(request)
+            received = bytearray()
+            while True:
+                data = sock.recv(65536)
+                if not data:
+                    return bytes(received)
+                received += data
+
+    def wait_for_log(self, text):
+        deadline = time.monotonic() + 3
+        while text not in self.stderr.getvalue() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        return self.stderr.getvalue()
+
+    def test_https_upstream_gets_injected_key_and_response_is_relayed(self):
+        requests, up_port = self.tls_upstream()
+        self.port = self.gateway(up_port, auth_style="x-api-key", ca_file=self.ca)
+        self.assertEqual(self.get(), OK_RESPONSE)
+        (seen,) = requests
+        lines = seen.decode("latin-1").split("\r\n")
+        self.assertIn("x-api-key: " + REAL_KEY, lines)
+        self.assertFalse([line for line in lines if line.lower().startswith("authorization:")])
+        self.assertNotIn(CLIENT_KEY.encode(), seen)
+        self.assertIn("Host: localhost:%d" % up_port, lines)
+        self.assertEqual(lines[0], "GET /v1/messages HTTP/1.1")
+
+    def test_untrusted_upstream_certificate_gets_502(self):
+        requests, up_port = self.tls_upstream()
+        self.port = self.gateway(up_port, auth_style="x-api-key")
+        self.assertTrue(self.get().startswith(b"HTTP/1.1 502 Bad Gateway\r\n"))
+        self.assertEqual(requests, [])
+
+    def test_log_line_marks_the_route_as_https(self):
+        _, up_port = self.tls_upstream()
+        self.port = self.gateway(up_port, ca_file=self.ca)
+        self.get()
+        log = self.wait_for_log("->")
+        self.assertTrue(log.startswith("https "), log)
+        self.assertIn("https %d GET /v1/messages -> localhost:%d\n" % (self.port, up_port), log)
+        self.assertNotIn(REAL_KEY, log)
+
+
 class MainTests(unittest.TestCase):
     def setUp(self):
         self.dir = Path(tempfile.mkdtemp())
@@ -604,6 +774,21 @@ class MainTests(unittest.TestCase):
         self.assert_usage_failure(
             ["--http", "39102=127.0.0.1:1", "--tcp", "39102=127.0.0.1:2", "--key-file", self.key_file()]
         )
+
+    def test_https_route_requires_key_file(self):
+        self.assert_usage_failure(["--https", "39105=127.0.0.1:1"])
+
+    def test_duplicate_listen_port_across_http_and_https(self):
+        self.assert_usage_failure(
+            ["--http", "39106=127.0.0.1:1", "--https", "39106=127.0.0.1:2", "--key-file", self.key_file()])
+        self.assert_usage_failure(
+            ["--https", "39107=127.0.0.1:1", "--https", "39107=127.0.0.1:2", "--key-file", self.key_file()])
+        self.assert_usage_failure(
+            ["--https", "39108=127.0.0.1:1", "--tcp", "39108=127.0.0.1:2", "--key-file", self.key_file()])
+
+    def test_bad_auth_style(self):
+        self.assert_usage_failure(
+            ["--http", "39109=127.0.0.1:1", "--auth-style", "basic", "--key-file", self.key_file()])
 
     def test_http_route_requires_key_file(self):
         self.assert_usage_failure(["--http", "39103=127.0.0.1:1"])
