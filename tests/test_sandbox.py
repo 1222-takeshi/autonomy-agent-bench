@@ -33,7 +33,8 @@ RULES = (
     "after the run.\n"
     "- Time limit: 60 minutes. Tool-call limit: 200. There is no network access.\n")
 ENDPOINT = "http://192.0.2.10:18888"
-UPSTREAM = ("192.0.2.10", 18888)
+UPSTREAM = ("http", "192.0.2.10", 18888)
+HTTPS_UPSTREAM = ("https", "api.anthropic.com", 443)
 TOOLS = "Bash,Read,Edit,Write,Glob,Grep,TodoWrite"
 SCRIPT = ('exec claude -p "$(cat /run/task/PROMPT.md)" --model "$0" --output-format stream-json --verbose '
           '--max-turns "$1" --permission-mode acceptEdits --allowedTools "$2" --disallowedTools "$3" "$4" '
@@ -92,12 +93,31 @@ class PureFunctionTests(unittest.TestCase):
 
     def test_parse_endpoint_good(self):
         self.assertEqual(sandbox.parse_endpoint(ENDPOINT), UPSTREAM)
-        self.assertEqual(sandbox.parse_endpoint("http://spark.example:80/"), ("spark.example", 80))
-        self.assertEqual(sandbox.parse_endpoint("http://h:1")[1], 1)
-        self.assertEqual(sandbox.parse_endpoint("http://h:65535")[1], 65535)
+        self.assertEqual(sandbox.parse_endpoint("http://spark.example:80/"), ("http", "spark.example", 80))
+        self.assertEqual(sandbox.parse_endpoint("http://h:1")[2], 1)
+        self.assertEqual(sandbox.parse_endpoint("http://h:65535")[2], 65535)
+
+    def test_parse_endpoint_http_returns_three_tuple(self):
+        got = sandbox.parse_endpoint("http://h:8080")
+        self.assertEqual(len(got), 3)
+        self.assertEqual(got, ("http", "h", 8080))
+
+    def test_parse_endpoint_https_defaults_to_port_443(self):
+        self.assertEqual(sandbox.parse_endpoint("https://api.anthropic.com"), HTTPS_UPSTREAM)
+        self.assertEqual(sandbox.parse_endpoint("https://api.anthropic.com/"), HTTPS_UPSTREAM)
+
+    def test_parse_endpoint_https_explicit_port(self):
+        self.assertEqual(sandbox.parse_endpoint("https://h.example:8443"), ("https", "h.example", 8443))
+        self.assertEqual(sandbox.parse_endpoint("https://h:1/"), ("https", "h", 1))
+
+    def test_parse_endpoint_https_bad(self):
+        for bad in ("https://h:0", "https://h:65536", "https://h/path", "https://user@h", "https://:443",
+                    "https://h:x", "https://h_x"):
+            with self.subTest(bad=bad), self.assertRaises(sandbox.UsageError):
+                sandbox.parse_endpoint(bad)
 
     def test_parse_endpoint_bad(self):
-        bad_urls = ("https://h:1", "http://h", "http://h:1/path", "http://h:1/a/", "http://user@h:1",
+        bad_urls = ("http://h", "http://h:1/path", "http://h:1/a/", "http://user@h:1",
                     "http://u:p@h:1", "http://h:0", "http://h:65536", "http://h:x", "", "h:1", "http://:1",
                     "http://h:1?x=1", "ftp://h:1", "http://h_x:1")
         for bad in bad_urls:
@@ -113,7 +133,16 @@ class PureFunctionTests(unittest.TestCase):
             "--mount", "type=bind,source=/opt/bench/egress.py,target=/opt/egress.py,readonly",
             "--mount", "type=bind,source=/run/keys/token,target=/run/egress/key,readonly",
             "egress:img", "python3", "/opt/egress.py", "--bind", "0.0.0.0",
-            "--http", "18888=192.0.2.10:18888", "--key-file", "/run/egress/key"])
+            "--http", "18888=192.0.2.10:18888", "--key-file", "/run/egress/key", "--auth-style", "both"])
+
+    def test_egress_argv_https_with_x_api_key_style(self):
+        argv = sandbox.egress_argv(NAMES, "egress:img", "/opt/bench/egress.py", "/run/keys/token",
+                                   HTTPS_UPSTREAM, "x-api-key")
+        self.assertEqual(argv[argv.index("python3"):], [
+            "python3", "/opt/egress.py", "--bind", "0.0.0.0", "--https", "18888=api.anthropic.com:443",
+            "--key-file", "/run/egress/key", "--auth-style", "x-api-key"])
+        self.assertNotIn("--http", argv)
+        self.assertNotIn("--ca-file", argv)
 
     def test_agent_argv_exact(self):
         argv = sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 200, "6g", "2")
@@ -128,6 +157,21 @@ class PureFunctionTests(unittest.TestCase):
             "-e", "ANTHROPIC_BASE_URL=http://egress:18888", "-e", "ANTHROPIC_API_KEY=" + DUMMY_KEY,
             "-e", "HOME=/home/bench", "-e", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=16384", "-e", "API_TIMEOUT_MS=900000",
             "agent:img", "bash", "-c", SCRIPT, "m-1", "200", TOOLS, "WebFetch", "WebSearch"])
+
+    def test_agent_argv_oauth_client_auth_uses_a_dummy_oauth_token(self):
+        api = sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 200, "6g", "2")
+        oauth = sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 200, "6g", "2",
+                                   client_auth="oauth")
+        self.assertEqual(sandbox.DUMMY_OAUTH_TOKEN, "sk-ant-oat01-bench-dummy")  # public-check: allow token
+        i = api.index("ANTHROPIC_API_KEY=" + DUMMY_KEY)
+        self.assertEqual(oauth[:i] + oauth[i + 1:], api[:i] + api[i + 1:])
+        self.assertEqual(oauth[i], "CLAUDE_CODE_OAUTH_TOKEN=" + sandbox.DUMMY_OAUTH_TOKEN)
+        self.assertFalse(any(a.startswith("ANTHROPIC_API_KEY=") for a in oauth))
+        self.assertEqual(sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 200, "6g", "2",
+                                            client_auth="api-key"), api)
+        with self.assertRaises(sandbox.UsageError):
+            sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 200, "6g", "2",
+                               client_auth="password")
 
     def test_agent_argv_defaults_to_8g_and_4_cpus(self):
         argv = sandbox.agent_argv(NAMES, "agent:img", "/srv/ws", "/srv/run/prompt.md", "m-1", 5)
@@ -348,7 +392,8 @@ class RunSandboxCase(unittest.TestCase):
                     "BENCH_WALL_SECONDS": "3600", "BENCH_EDITABLE_PATHS": json.dumps(EDITABLE)}
         self.prompt = self.usage.with_name("prompt.md")
         self.args = SimpleNamespace(agent_image="agent:img", egress_image="egress:img", endpoint=ENDPOINT,
-                                    key_file=str(self.key), model="m-1", max_turns=200, memory="8g", cpus="4")
+                                    key_file=str(self.key), model="m-1", max_turns=200, memory="8g", cpus="4",
+                                    auth_style="both", client_auth="api-key")
         self.reset()
         for signum in (signal.SIGTERM, signal.SIGINT):
             original = signal.getsignal(signum) or signal.SIG_DFL
@@ -412,6 +457,34 @@ class RunSandboxTests(RunSandboxCase):
         agent = sandbox.agent_argv(NAMES, "agent:img", str(self.workspace), str(self.prompt), "m-1", 200, "8g", "4")
         self.assertEqual(seq[4], ("popen", agent))
         self.assertEqual(seq[5:], [("docker", argv) for argv in TEARDOWN])
+
+    def test_case_placeholder_in_agent_image_uses_the_lowercased_case_id(self):
+        self.args.agent_image = "aab/agent-claude:{case}"
+        self.env["BENCH_CASE_ID"] = "FEAT-001"
+        self.run_it([result()], 0)
+        (agent,) = [argv for kind, argv, _ in self.events if kind == "popen"]
+        self.assertIn("aab/agent-claude:feat-001", agent)
+        self.assertNotIn("aab/agent-claude:{case}", agent)
+
+    def test_case_placeholder_without_case_id_raises_before_docker(self):
+        self.args.agent_image = "aab/agent-claude:{case}"
+        self.env.pop("BENCH_CASE_ID", None)
+        with self.assertRaises(sandbox.UsageError):
+            self.run_it([result()], 0)
+        self.assertEqual(self.docker_calls(), [])
+
+    def test_agent_image_without_placeholder_is_used_as_is(self):
+        self.env["BENCH_CASE_ID"] = "FEAT-001"
+        self.run_it([result()], 0)
+        (agent,) = [argv for kind, argv, _ in self.events if kind == "popen"]
+        self.assertIn("agent:img", agent)
+
+    def test_oauth_client_auth_reaches_the_agent_container(self):
+        self.args.client_auth = "oauth"
+        self.run_it([result()], 0)
+        (agent,) = [argv for kind, argv, _ in self.events if kind == "popen"]
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN=" + sandbox.DUMMY_OAUTH_TOKEN, agent)
+        self.assertFalse(any(a.startswith("ANTHROPIC_API_KEY=") for a in agent))
 
     def test_prompt_is_written_next_to_the_usage_file_and_mounted(self):
         self.task.write_text("do the task\n\n")
@@ -622,10 +695,37 @@ class MainTests(unittest.TestCase):
             self.assertEqual((args.agent_image, args.egress_image, args.endpoint, args.key_file, args.model),
                              ("agent:img", "egress:img", ENDPOINT, "/k/token", "m-1"))
             self.assertEqual((int(args.max_turns), str(args.memory), str(args.cpus)), (200, "8g", "4"))
+            self.assertEqual(args.auth_style, "both")
+            self.assertEqual(args.client_auth, "api-key")
             self.assertEqual(dict(env), dict(os.environ))
             self.call_main(self.ARGV + ["--memory", "4g", "--cpus", "2"])
             args = run_sandbox.call_args.args[0]
             self.assertEqual((str(args.memory), str(args.cpus)), ("4g", "2"))
+
+    def test_client_auth_option_is_accepted_and_validated(self):
+        with mock.patch.object(sandbox, "run_sandbox", return_value=0) as run_sandbox:
+            for mode in ("api-key", "oauth"):
+                with self.subTest(mode=mode):
+                    code, _ = self.call_main(self.ARGV + ["--client-auth", mode])
+                    self.assertEqual(code, 0)
+                    self.assertEqual(run_sandbox.call_args.args[0].client_auth, mode)
+            run_sandbox.reset_mock()
+            code, err = self.call_main(self.ARGV + ["--client-auth", "password"])
+            self.assertEqual(code, 2)
+            run_sandbox.assert_not_called()
+
+    def test_auth_style_option_is_accepted_and_validated(self):
+        with mock.patch.object(sandbox, "run_sandbox", return_value=0) as run_sandbox:
+            for style in ("both", "x-api-key", "bearer"):
+                with self.subTest(style=style):
+                    code, _ = self.call_main(self.ARGV + ["--auth-style", style])
+                    self.assertEqual(code, 0)
+                    self.assertEqual(run_sandbox.call_args.args[0].auth_style, style)
+            run_sandbox.reset_mock()
+            code, err = self.call_main(self.ARGV + ["--auth-style", "digest"])
+            self.assertEqual(code, 2)
+            self.assertTrue(err.strip())
+            run_sandbox.assert_not_called()
 
 
 if __name__ == "__main__":

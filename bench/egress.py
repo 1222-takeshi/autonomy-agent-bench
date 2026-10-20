@@ -9,6 +9,7 @@ is reachable. Standard library only.
 import argparse
 import re
 import selectors
+import ssl
 import signal
 import socket
 import socketserver
@@ -23,12 +24,15 @@ DEFAULT_MAX_CONNECTIONS = 64
 HOP_HEADERS = frozenset(("connection", "proxy-connection", "keep-alive",
                          "proxy-authorization", "te", "upgrade"))
 AUTH_HEADERS = frozenset(("authorization", "x-api-key"))
+AUTH_STYLES = ("both", "x-api-key", "bearer")
 CHUNK_SIZE = 65536
 CONNECT_TIMEOUT = 30
 ALLOWED_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE",
                              "OPTIONS"})
 
 HOST_RE = re.compile(r"[A-Za-z0-9.-]+")
+# RFC 9110 field-name token: no whitespace allowed at all.
+TOKEN_RE = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
 _BAD_PREFIX = "HTTP/1.1 %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 BAD_REQUEST = (_BAD_PREFIX % "400 Bad Request").encode("latin-1")
@@ -102,14 +106,20 @@ def read_head(sock, max_bytes):
         buffer += data
 
 
-def rewrite_head(head, key, upstream_host, upstream_port):
+def rewrite_head(head, key, upstream_host, upstream_port,
+                 auth_style="both", default_port=None):
     """Return the request head rewritten to reach ``upstream_host:upstream_port``.
 
     Validates the request line, drops hop and auth headers, resets ``Host`` (all
-    cases, all counts), and appends ``Host``, ``Authorization``, ``x-api-key``
-    and ``Connection: close``. Other headers keep their original order and case.
-    Raises ``ValueError`` on a bad request line, header, or obs-fold continuation.
+    cases, all counts), and appends ``Host``, the auth header(s) the style asks
+    for (``Authorization`` before ``x-api-key``) and ``Connection: close``. Other
+    headers keep their original order and case. ``default_port`` suppresses the
+    ``:port`` on ``Host`` when it equals ``upstream_port`` (the HTTPS case).
+    Raises ``ValueError`` on a bad request line, header, obs-fold continuation,
+    or an unknown ``auth_style``.
     """
+    if auth_style not in AUTH_STYLES:
+        raise ValueError("unknown auth style: %r" % (auth_style,))
     text = head.decode("latin-1")
     cut = text.find("\r\n\r\n")
     if cut == -1:
@@ -130,17 +140,40 @@ def rewrite_head(head, key, upstream_host, upstream_port):
         if ":" not in raw:
             raise ValueError("bad header")
         name = raw.split(":", 1)[0]
+        if not TOKEN_RE.fullmatch(name):
+            raise ValueError("bad header")
         lower = name.lower()
         if lower in HOP_HEADERS or lower in AUTH_HEADERS or lower == "host":
             continue
         headers.append(raw)
     output = [request_line]
     output.extend(headers)
-    output.append("Host: %s:%d" % (upstream_host, upstream_port))
-    output.append("Authorization: Bearer %s" % key)
-    output.append("x-api-key: %s" % key)
+    if default_port is not None and default_port == upstream_port:
+        output.append("Host: %s" % upstream_host)
+    else:
+        output.append("Host: %s:%d" % (upstream_host, upstream_port))
+    if auth_style in ("bearer", "both"):
+        output.append("Authorization: Bearer %s" % key)
+    if auth_style in ("x-api-key", "both"):
+        output.append("x-api-key: %s" % key)
     output.append("Connection: close")
     return ("\r\n".join(output) + "\r\n\r\n").encode("latin-1")
+
+
+def tls_connector(ca_file=None):
+    """Return ``connect(address, timeout)`` that TLS-wraps a fresh socket.
+
+    ``ssl.create_default_context`` keeps hostname and certificate verification
+    enabled, so a self-signed or mismatched upstream raises ``ssl.SSLError`` (an
+    ``OSError`` subclass) that ``handle_http`` answers with a 502.
+    """
+    context = ssl.create_default_context(cafile=ca_file)
+
+    def connect(address, timeout):
+        sock = socket.create_connection(address, timeout=timeout)
+        return context.wrap_socket(sock, server_hostname=address[0])
+
+    return connect
 
 
 def relay(a, b, idle_timeout):
@@ -243,7 +276,8 @@ def _reject_client(client):
 
 
 def handle_http(client, upstream, key, idle_timeout, max_head_bytes,
-                connect=socket.create_connection):
+                connect=socket.create_connection, auth_style="both",
+                default_port=None, log_prefix="http"):
     """Read one request head, rewrite it, connect upstream, and relay the swap."""
     try:
         head, rest = read_head(client, max_head_bytes)
@@ -253,7 +287,8 @@ def handle_http(client, upstream, key, idle_timeout, max_head_bytes,
         if len(parts) == 3:
             method = parts[0].decode("latin-1")
             path = parts[1].split(b"?", 1)[0].decode("latin-1")
-        head = rewrite_head(head, key, upstream[0], upstream[1])
+        head = rewrite_head(head, key, upstream[0], upstream[1],
+                            auth_style=auth_style, default_port=default_port)
     except ValueError:
         _respond(client, BAD_REQUEST)
         client.close()
@@ -284,8 +319,8 @@ def handle_http(client, upstream, key, idle_timeout, max_head_bytes,
         pass
     _safe_close(upstream_sock)
     _safe_close(client)
-    _write_log("http %d %s %s -> %s:%d\n"
-               % (listen_port, method, path, upstream[0], upstream[1]))
+    _write_log("%s %d %s %s -> %s:%d\n"
+               % (log_prefix, listen_port, method, path, upstream[0], upstream[1]))
 
 
 def handle_tcp(client, upstream, idle_timeout,
@@ -320,7 +355,7 @@ class _Server(socketserver.ThreadingTCPServer):
 
 
 def _serve(bind, route, http_route, key, idle_timeout, max_head_bytes,
-           max_connections):
+           max_connections, connect, auth_style, default_port, log_prefix):
     listen_port, host, port = route
     upstream = (host, port)
     semaphore = threading.BoundedSemaphore(max_connections)
@@ -334,7 +369,9 @@ def _serve(bind, route, http_route, key, idle_timeout, max_head_bytes,
             try:
                 client.settimeout(30)
                 if self.server.route_kind == "http":
-                    handle_http(client, upstream, key, idle_timeout, max_head_bytes)
+                    handle_http(client, upstream, key, idle_timeout, max_head_bytes,
+                                connect=connect, auth_style=auth_style,
+                                default_port=default_port, log_prefix=log_prefix)
                 else:
                     handle_tcp(client, upstream, idle_timeout)
             finally:
@@ -348,21 +385,31 @@ def _serve(bind, route, http_route, key, idle_timeout, max_head_bytes,
 
 
 def start(bind, http_routes, tcp_routes, key, idle_timeout, max_head_bytes,
-          max_connections=DEFAULT_MAX_CONNECTIONS):
+          max_connections=DEFAULT_MAX_CONNECTIONS,
+          https_routes=(), auth_style="both", ca_file=None):
     """Build and start one threaded server per route, returning the servers.
 
-    Each route is ``(listen_port, host, port)``; ``http_routes`` and
-    ``tcp_routes`` choose the handler. A listen port of ``0`` lets the OS pick
-    the port. Each server runs in a daemon thread and accepts at most
-    ``max_connections`` simultaneous clients.
+    Each route is ``(listen_port, host, port)``; ``http_routes``,
+    ``https_routes`` and ``tcp_routes`` choose the handler. HTTPS routes
+    connect with a TLS socket built from ``ca_file`` and log with an ``https``
+    prefix. A listen port of ``0`` lets the OS pick the port. Each server runs
+    in a daemon thread and accepts at most ``max_connections`` simultaneous
+    clients.
     """
+    https_connect = tls_connector(ca_file) if https_routes else None
     servers = []
     for route in list(http_routes):
         servers.append(_serve(bind, route, True, key, idle_timeout, max_head_bytes,
-                              max_connections))
+                              max_connections, socket.create_connection,
+                              auth_style, None, "http"))
+    for route in list(https_routes):
+        servers.append(_serve(bind, route, True, key, idle_timeout, max_head_bytes,
+                              max_connections, https_connect,
+                              auth_style, 443, "https"))
     for route in list(tcp_routes):
         servers.append(_serve(bind, route, False, key, idle_timeout, max_head_bytes,
-                              max_connections))
+                              max_connections, socket.create_connection,
+                              auth_style, None, "http"))
     return servers
 
 
@@ -377,8 +424,12 @@ def main(argv=None):
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--http", action="append", default=[],
                         metavar="LISTEN=HOST:PORT")
+    parser.add_argument("--https", action="append", default=[],
+                        metavar="LISTEN=HOST:PORT")
     parser.add_argument("--tcp", action="append", default=[],
                         metavar="LISTEN=HOST:PORT")
+    parser.add_argument("--auth-style", choices=AUTH_STYLES, default="both")
+    parser.add_argument("--ca-file", default=None)
     parser.add_argument("--key-file", default=None)
     parser.add_argument("--idle-timeout", type=int, default=DEFAULT_IDLE_TIMEOUT)
     parser.add_argument("--max-head-bytes", type=int, default=DEFAULT_MAX_HEAD_BYTES)
@@ -386,6 +437,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         http_routes = []
+        https_routes = []
         tcp_routes = []
         ports = set()
         for spec in args.http:
@@ -394,16 +446,22 @@ def main(argv=None):
                 raise UsageError("duplicate listen port: %d" % parsed[0])
             ports.add(parsed[0])
             http_routes.append(parsed)
+        for spec in args.https:
+            parsed = parse_route(spec)
+            if parsed[0] in ports:
+                raise UsageError("duplicate listen port: %d" % parsed[0])
+            ports.add(parsed[0])
+            https_routes.append(parsed)
         for spec in args.tcp:
             parsed = parse_route(spec)
             if parsed[0] in ports:
                 raise UsageError("duplicate listen port: %d" % parsed[0])
             ports.add(parsed[0])
             tcp_routes.append(parsed)
-        if not http_routes and not tcp_routes:
-            raise UsageError("at least one --http or --tcp route is required")
-        if http_routes and not args.key_file:
-            raise UsageError("--key-file is required when an --http route exists")
+        if not http_routes and not https_routes and not tcp_routes:
+            raise UsageError("at least one --http, --https or --tcp route is required")
+        if (http_routes or https_routes) and not args.key_file:
+            raise UsageError("--key-file is required when an --http or --https route exists")
         key = read_key(args.key_file)
     except UsageError as exc:
         sys.stderr.write(str(exc) + "\n")
@@ -411,7 +469,8 @@ def main(argv=None):
     try:
         servers = start(args.bind, http_routes, tcp_routes, key,
                         args.idle_timeout, args.max_head_bytes,
-                        args.max_connections)
+                        args.max_connections, https_routes=https_routes,
+                        auth_style=args.auth_style, ca_file=args.ca_file)
     except OSError as exc:
         sys.stderr.write("bind failed: %s\n" % exc)
         return 2
