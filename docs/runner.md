@@ -94,12 +94,13 @@ argv にはローカルのパスが入りうるため、`run.json` をそのま�
 
 ## 限界
 
-このrunnerだけでは、実モデルの比較に使える隔離にならない。
-agent は runner と同じ OS ユーザーで、host 上で動く。台本どおりに動く control（参照修正・無変更・範囲外編集）で採点境界を確かめるためのもの。
-実モデルを走らせる前に、agent を別ユーザーの container で動かす仕組みを入れる（#12 の次の段階）。
+agent 定義の `argv` を直接 host で動かすと、実モデルの比較に使える隔離にならない。
+その場合の agent は runner と同じ OS ユーザーで host 上で動くため、台本どおりに動く control（参照修正・無変更・範囲外編集）を確かめる用途に限る。
+実モデルは [sandbox.md](sandbox.md) の launcher を `argv` にして、container の中で動かす。
+host で直接動かす場合の限界は次のとおり。
 
 - **workspace の外を読める。** agent は host のファイル、他の run、非公開の cache を読める。
 - **記録を後から書き換えられる。** `setsid` などで process group から抜けた子プロセスは、終了時の SIGKILL で止まらない。
   そうした子プロセスは、runner が `run.json` を書いたあとでも run ディレクトリを書き換えうる。
-- **使用量は自己申告。** `usage.json` は agent 側（adapter）が書く。runner はモデルを呼ばないため、tokens と tool 回数を独立に測れない。adapter はクライアントの使用量の記録から書く。
+- **使用量は自己申告。** `usage.json` は agent 側（adapter）が書く。runner はモデルを呼ばないため、tokens と tool 回数を独立に測れない。sandbox の launcher は container の外で transcript から書く。
 - **採点には固有の限界がある。** 採点器の限界は [verify.md](verify.md#限界) を参照。
