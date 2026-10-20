@@ -48,7 +48,7 @@ ALG-001の候補bundle・採点用テスト・参照修正・検証記録はrepo
 このrepoはpublic。第三者source・rosbag・地図・大きな生成物・raw結果・参照解はcommitしない。
 取得元、revision、ライセンス、artifactのSHA256を記録し、候補側には問題に必要なsnapshotだけを渡す。
 registryへ公開しないimageは、`runtime.image`の`@sha256:`にローカルのimage IDを記録する。保管したtarを`docker load`して使い、tarのSHA256は検証記録に残す。
-実車・実ネットワークの設定変更や走行試験を評価に含めない。LICENSEは未設定。第三者データを追加する場合は出典と利用条件を確認する。
+実車・実ネットワークの設定変更や走行試験を評価に含めない。コードと文書は[Apache-2.0](LICENSE)。bundleに含める上流のsourceは各repositoryのライセンス（catalogの`source.license`）に従う。第三者データを追加する場合は出典と利用条件を確認する。
 
 - [Autoware公式インストール手順](https://docs.autoware.org/main/installation/autoware/source-installation/): 対象revisionに合うROS環境を選び、ケースごとに固定する。
 - [ROS 2公式QoS仕様](https://github.com/ros2/ros2_documentation/blob/humble/source/Concepts/Intermediate/About-Quality-of-Service-Settings.rst): 提供/要求の互換性と遅延参加の契約を参照する。
