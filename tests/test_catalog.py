@@ -37,7 +37,7 @@ class CatalogTests(unittest.TestCase):
         catalog = json.loads((ROOT / "cases/catalog.json").read_text())
         self.assertEqual(validate(catalog), [])
         self.assertEqual({c["track"] for c in catalog["cases"]}, {"algorithm_debug","integration_debug","feature_implementation"})
-        self.assertEqual({c["id"]: c["status"] for c in catalog["cases"]}, {"ALG-001":"ready","INT-001":"draft","FEAT-001":"draft"})
+        self.assertEqual({c["id"]: c["status"] for c in catalog["cases"]}, {"ALG-001":"ready","ALG-002":"ready","INT-001":"ready","FEAT-001":"ready"})
         ready = [c for c in catalog["cases"] if c["status"] == "ready"]
         self.assertEqual(validate({"schema_version":1,"cases":ready}, require_ready=True), [])
 
@@ -97,10 +97,17 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(validate(document))
 
     def test_cli_validation_and_release_gate(self):
-        for options, expected in [([],0), (["--require-ready"],2)]:
+        for options, expected in [([],0), (["--require-ready"],0)]:
             result = subprocess.run([sys.executable,"-m","bench.catalog","cases/catalog.json",*options],cwd=ROOT,capture_output=True,text=True)
             self.assertEqual(result.returncode,expected,result.stderr)
         with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/"with_draft.json"
+            catalog = json.loads((ROOT / "cases/catalog.json").read_text())
+            catalog["cases"].append(fixture()["cases"][0] | {"id":"ALG-999"})
+            path.write_text(json.dumps(catalog))
+            for options, expected in [([],0), (["--require-ready"],2)]:
+                result = subprocess.run([sys.executable,"-m","bench.catalog",str(path),*options],cwd=ROOT,capture_output=True,text=True)
+                self.assertEqual(result.returncode,expected,result.stderr)
             path = Path(directory)/"broken.json"
             result = subprocess.run([sys.executable,"-m","bench.catalog",str(path)],cwd=ROOT,capture_output=True,text=True)
             self.assertEqual(result.returncode,2)
