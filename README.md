@@ -33,6 +33,7 @@ python3 -m bench.catalog cases/catalog.json --require-ready
 
 - [cases/catalog.json](cases/catalog.json): 候補と再現・昇格条件。revision等の未決値はnull。
 - [docs/protocol.md](docs/protocol.md): 入出力、採点、状態遷移、データ境界。
+- [docs/verify.md](docs/verify.md): 隔離containerで1パッケージを構築・テストする採点controller。
 - `bench/catalog.py` / `tests/`: metadata検査とnormal/edge/invalid/regressionのテスト。
 - GitHub-hosted CI: テスト・catalog・Python構文・差分空白を検査。ROSやモデルは起動しない。[CI運用](docs/ci.md)。
 
