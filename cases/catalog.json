@@ -2,15 +2,15 @@
   "schema_version": 1,
   "cases": [
     {
-      "id": "ALG-001", "track": "algorithm_debug", "status": "draft",
-      "title": "候補: 軌跡補間の角度境界・重複点での不連続を解析する",
+      "id": "ALG-001", "track": "algorithm_debug", "status": "ready",
+      "title": "姿勢補間がヨー角±180°付近で逆向きになる不具合を解析・修正する",
       "issue": "https://github.com/1222-takeshi/autonomy-agent-bench/issues/2",
-      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": null, "kind": "candidate", "license": null},
-      "runtime": {"image": null, "ros_distro": null, "rmw": null, "platform": null, "network": null},
-      "artifacts": {"bundle_sha256": null, "verification_sha256": null},
-      "controls": {"baseline": null, "reference": null, "wrong_patch": null, "regression": null, "repetitions": null},
-      "limits": null, "editable_paths": [],
-      "acceptance": {"normal": "通常の前進軌跡", "edge": "角度の±π境界・重複点・逆走", "invalid": "空入力・不正な間隔", "regression": "既存補間APIと端点の保持"}
+      "source": {"repository": "https://github.com/autowarefoundation/autoware_core", "revision": "384bcd47e6d2fd21e5954a915153aa5303b34a53", "kind": "injected", "license": "Apache-2.0"},
+      "runtime": {"image": "aab/ros-humble-cpp@sha256:09653c30a388dbf9974d783c5e85d1ccc3df8d3cd52ce02f91c49abb2cc12407", "ros_distro": "humble", "rmw": "rmw_fastrtps_cpp", "platform": "linux/amd64", "network": "none"},
+      "artifacts": {"bundle_sha256": "5a19c9406d93e5d87c100bca6eaf3b5ef2fee3ec52c0d433ef707ce1a8f54d37", "verification_sha256": "8fcd9d24b3e120c5a845378d5a1cf75479c785eefa9632fb99bc371b31079a1a"},
+      "controls": {"baseline": "fail", "reference": "pass", "wrong_patch": "fail", "regression": "pass", "repetitions": 3},
+      "limits": {"wall_seconds": 3600, "output_tokens": 128000, "tool_calls": 200}, "editable_paths": ["src/autoware_interpolation/src", "src/autoware_interpolation/include", "src/autoware_interpolation/test", "ANALYSIS.md"],
+      "acceptance": {"normal": "±180°から離れたヨー角変化を従来どおり補間する", "edge": "±180°を両方向にまたぐ補間、同じ回転の別表現、複数区間版", "invalid": "空・未整列・範囲外のkeyを従来どおり例外で拒否する", "regression": "既存テスト全件と一般的な3次元回転の補間結果を保つ"}
     },
     {
       "id": "INT-001", "track": "integration_debug", "status": "draft",
